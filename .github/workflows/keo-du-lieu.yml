@@ -1,0 +1,42 @@
+name: Kéo dữ liệu Sunwoo
+
+on:
+  schedule:
+    # Mỗi giờ, vào phút 17 (tránh phút 0 vì lúc đó GitHub đông, hay bị trễ)
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      che_do:
+        description: "Chế độ chạy"
+        required: true
+        default: tang-dan
+        type: choice
+        options:
+          - tang-dan
+          - day-du
+
+concurrency:
+  group: keo-du-lieu
+  cancel-in-progress: false
+
+jobs:
+  keo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Kéo khách từ Pancake
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PANCAKE_TOKENS: ${{ secrets.PANCAKE_TOKENS }}
+          LAY_TU_NGAY: "2026-09-01"
+        run: python keo_pancake.py ${{ inputs.che_do || 'tang-dan' }}
