@@ -168,3 +168,39 @@ select
 from chi_tieu_ads a
 left join tra_ad t on t.ad_id = a.ad_id
 group by 1, 2, 3;
+
+-- =====================================================================
+-- 8. BANG RONG  (de Sheets tu pivot, khong phai nho sua SQL)
+-- =====================================================================
+
+-- Moi dong: mot to hop ngay x mang x page x loai x co SDT x tag x hanh dong
+-- Tu bang nay pivot ra duoc gan het bao cao hien tai ma khong can SQL moi.
+create or replace view gop_rong as
+with kh as (
+  select h.page_id, h.id,
+         (h.tao_luc at time zone 'Asia/Ho_Chi_Minh')::date as ngay,
+         h.page_ten,
+         case when h.page_ten ~* 'dental|implant|crown|wisdom|rang'
+              then 'Dental' else 'Beauty' end as mang,
+         coalesce(h.du_lieu ->> 'type', 'khong ro') as loai,
+         (h.du_lieu ->> 'has_phone') = 'true' as co_sdt
+  from hoi_thoai h
+)
+select kh.ngay, kh.mang, kh.page_ten, kh.loai, kh.co_sdt,
+       l.tag, coalesce(l.hanh_dong, 'add') as hanh_dong,
+       count(distinct (kh.page_id, kh.id)) as so_khach
+from kh
+join lich_su_tag l on l.page_id = kh.page_id and l.hoi_thoai = kh.id
+group by 1, 2, 3, 4, 5, 6, 7;
+
+-- Tong khach theo ngay, khong phu thuoc tag
+create or replace view gop_khach_ngay as
+select (h.tao_luc at time zone 'Asia/Ho_Chi_Minh')::date as ngay,
+       case when h.page_ten ~* 'dental|implant|crown|wisdom|rang'
+            then 'Dental' else 'Beauty' end as mang,
+       h.page_ten,
+       coalesce(h.du_lieu ->> 'type', 'khong ro') as loai,
+       count(*) as so_khach,
+       count(*) filter (where (h.du_lieu ->> 'has_phone') = 'true') as co_sdt
+from hoi_thoai h
+group by 1, 2, 3, 4;
