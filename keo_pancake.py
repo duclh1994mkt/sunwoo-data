@@ -103,26 +103,45 @@ def doc_thoi_diem(gia_tri):
     return thoi_diem
 
 
-def ten_tag(muc):
-    if not isinstance(muc, dict):
-        return None
-    for khoa in ("tag_name", "text", "name", "title"):
-        if muc.get(khoa):
-            return str(muc[khoa]).strip()
-    return None
-
-
 def tach_lich_su_tag(page_id, hoi_thoai):
-    """Lấy các mốc giờ gắn tag. Trả về list rỗng nếu API không cung cấp."""
+    """Lấy các mốc gắn/gỡ tag.
+
+    Cấu trúc Pancake trả về, đã kiểm chứng trên dữ liệu thật:
+        tag_histories: [
+          { "inserted_at": "...",
+            "conversation_id": "...",
+            "payload": { "tag": {"text": "Q3", ...},
+                         "action": "add",
+                         "editor_name": "..." } },
+          ...
+        ]
+    Tên tag nằm trong payload.tag.text chứ không ở ngoài.
+    """
     ra = []
     lich_su = hoi_thoai.get("tag_histories")
     if not isinstance(lich_su, list):
         return ra
     for muc in lich_su:
-        ten = ten_tag(muc)
-        luc = doc_thoi_diem(muc.get("inserted_at") if isinstance(muc, dict) else None)
-        if ten and luc:
-            ra.append((page_id, str(hoi_thoai["id"]), ten, luc))
+        if not isinstance(muc, dict):
+            continue
+        payload = muc.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        tag = payload.get("tag")
+        ten = str(tag.get("text") or "").strip() if isinstance(tag, dict) else ""
+        luc = doc_thoi_diem(muc.get("inserted_at"))
+        if not ten or not luc:
+            continue
+        ra.append(
+            (
+                page_id,
+                str(hoi_thoai["id"]),
+                ten,
+                luc,
+                str(payload.get("action") or "").strip() or None,
+                str(payload.get("editor_name") or "").strip() or None,
+            )
+        )
     return ra
 
 
@@ -189,9 +208,12 @@ def ghi_hoi_thoai(ket_noi, page_id, page_ten, danh_sach):
             psycopg2.extras.execute_values(
                 con_tro,
                 """
-                insert into lich_su_tag (page_id, hoi_thoai, tag, gan_luc)
+                insert into lich_su_tag
+                  (page_id, hoi_thoai, tag, gan_luc, hanh_dong, nguoi_gan)
                 values %s
-                on conflict do nothing
+                on conflict (page_id, hoi_thoai, tag, gan_luc) do update set
+                  hanh_dong = excluded.hanh_dong,
+                  nguoi_gan = excluded.nguoi_gan
                 """,
                 tag_hang,
                 page_size=1000,

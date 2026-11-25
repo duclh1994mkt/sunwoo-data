@@ -31,15 +31,22 @@ create table if not exists lich_su_tag (
   hoi_thoai text        not null,
   tag       text        not null,
   gan_luc   timestamptz not null,
+  hanh_dong text,
+  nguoi_gan text,
   primary key (page_id, hoi_thoai, tag, gan_luc)
 );
+
+alter table lich_su_tag add column if not exists hanh_dong text;
+alter table lich_su_tag add column if not exists nguoi_gan text;
 
 create index if not exists lich_su_tag_gan_idx on lich_su_tag (gan_luc);
 create index if not exists lich_su_tag_tag_idx on lich_su_tag (tag);
 
 comment on table lich_su_tag is
-  'Moc gio gan tag, tach ra tu truong tag_histories. Dong 28 bao cao thang '
-  '(Tong booking thuc te) dem tu bang nay chu khong dem theo ngay hoi thoai.';
+  'Moc gio gan/go tag, tach tu tag_histories. Ten tag nam o payload.tag.text, '
+  'hanh dong o payload.action (add/remove), nguoi thao tac o payload.editor_name. '
+  'Dong 28 bao cao thang (Tong booking thuc te) dem tu bang nay, theo thoi diem '
+  'gan tag, chu khong theo ngay hoi thoai.';
 
 -- =====================================================================
 -- 3. CHI TIEU ADS  (mot dong moi ad moi ngay)
@@ -136,7 +143,18 @@ select
   count(distinct (l.page_id, l.hoi_thoai))          as so_khach
 from lich_su_tag l
 where upper(l.tag) like '%BOOKING%'
+  and coalesce(l.hanh_dong, 'add') = 'add'
 group by 1, 2;
+
+-- Moi tag theo ngay, ke ca luot go tag
+create or replace view gop_tag_ngay as
+select
+  (l.gan_luc at time zone 'Asia/Ho_Chi_Minh')::date as ngay,
+  l.tag,
+  l.hanh_dong,
+  count(distinct (l.page_id, l.hoi_thoai))          as so_khach
+from lich_su_tag l
+group by 1, 2, 3;
 
 -- Chi tieu ads theo ngay va ma content
 create or replace view gop_ads as
