@@ -74,6 +74,14 @@ def lay_mot_page(page_id, token, tu_giay, den_giay, ghi_tien_do=None):
                     raise
                 time.sleep(2 * (lan + 1))
 
+        # Pancake tra ve 200 kem success=false khi token het han hoac bi
+        # thu hoi. Khong bat o day thi page do lang le tra ve 0 hoi thoai
+        # va bao cao cu the dung so cu, khong ai biet.
+        if isinstance(du_lieu, dict) and du_lieu.get("success") is False:
+            raise RuntimeError(
+                "Pancake tu choi: " + str(du_lieu.get("message") or du_lieu)[:200]
+            )
+
         khoi = du_lieu.get("conversations") or []
         if not khoi:
             break
@@ -314,6 +322,13 @@ def chay():
     tong = tong_moi = tong_sua = 0
     loi = []
 
+    # So hoi thoai dang co san cua tung page, de biet page nao DANG co du
+    # lieu ma lan nay lai tra ve 0 — do gan nhu chac chan la hong token,
+    # khong phai page vang khach.
+    with ket_noi.cursor() as con_tro:
+        con_tro.execute("select page_id, count(*) from hoi_thoai group by 1")
+        da_co = {str(h[0]): h[1] for h in con_tro.fetchall()}
+
     khoa_ghi = threading.Lock()
     bat_dau_keo = time.time()
 
@@ -328,6 +343,11 @@ def chay():
             den_giay,
             ghi_tien_do=lambda n: print(f"  [{ten}] {n} hội thoại", flush=True),
         )
+        if not danh_sach and da_co.get(str(page_id), 0) > 0:
+            raise RuntimeError(
+                f"tra ve 0 hoi thoai trong khi kho dang co "
+                f"{da_co[str(page_id)]} dong — nhieu kha nang token het han"
+            )
         with khoa_ghi:
             moi, sua = ghi_hoi_thoai(ket_noi, page_id, ten, danh_sach)
         giay = round(time.time() - bat_dau_keo)
