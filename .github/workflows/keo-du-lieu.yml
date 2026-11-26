@@ -40,6 +40,8 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           PANCAKE_TOKENS: ${{ secrets.PANCAKE_TOKENS }}
+          # Page bo sung, them sau. De trong cung khong sao.
+          PANCAKE_TOKENS_THEM: ${{ secrets.PANCAKE_TOKENS_THEM }}
           LAY_TU_NGAY: "2026-09-01"
           # Cửa sổ kéo: 30 ngày gần nhất, tính cả hôm nay.
           SO_NGAY_KEO: "30"

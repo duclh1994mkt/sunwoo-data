@@ -286,7 +286,16 @@ def chay():
     if che_do not in ("day-du", "tang-dan"):
         raise SystemExit("Chế độ phải là day-du hoặc tang-dan")
 
+    # Danh sach page goc. PANCAKE_TOKENS_THEM la phan bo sung: GitHub khong
+    # cho xem lai secret da luu, nen them page moi vao mot secret rieng de
+    # khong phai go lai toan bo token cu. Page trung id thi ban THEM thang.
     cac_page = json.loads(os.environ["PANCAKE_TOKENS"])
+    them = (os.environ.get("PANCAKE_TOKENS_THEM") or "").strip()
+    if them:
+        bo_sung = json.loads(them)
+        cac_page.update(bo_sung)
+        print(f"Co them {len(bo_sung)} page tu PANCAKE_TOKENS_THEM.", flush=True)
+
     ket_noi = psycopg2.connect(os.environ["DATABASE_URL"])
 
     bay_gio = datetime.now(tz=VN)
