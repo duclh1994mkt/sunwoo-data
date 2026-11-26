@@ -229,54 +229,87 @@ grant select on
 to anon, authenticated, service_role;
 
 -- =====================================================================
--- 10. KHACH CHI TIET + 10 LAT 6.000 DONG  (cho Google Sheets)
+-- 10. KHACH CHI TIET (co moc gio tag) + 15 LAT 4.000 DONG cho Sheets
 -- =====================================================================
 -- Google chan IMPORTDATA khi mot lan tai qua lon: 37.557 dong x 12 cot
 -- bi tu choi ("Tai nguyen tai cac noi dung url da vuot qua kich thuoc
--- toi da"). Nguong thuc te do duoc: ~12.000 dong x 8 cot chay duoc,
--- 22.097 dong x 12 cot thi khong. Nen cat thanh lat 6.000 dong.
+-- toi da"). Nguong do duoc: ~12.000 dong x 8 cot va 7.608 dong x 12 cot
+-- chay duoc; 22.097 dong x 12 cot thi khong. Nen cat thanh lat nho.
 --
--- Trong Sheets, lat k nam o dong 2 + (k-1)*6000, nen cac lat noi lien
--- nhau thanh mot bang lien tuc, khong co dong tieu de chen giua
--- (Edge Function nhan &tieu_de=0 thi bo dong tieu de).
+-- Trong tab "SB - Khach chi tiet", lat k nam o dong 2 + (k-1)*4000, nen
+-- cac lat noi lien nhau thanh mot bang lien tuc khong co dong tieu de
+-- chen giua (Edge Function nhan &tieu_de=0 thi bo dong tieu de).
+-- 15 lat x 4.000 = suc chua 60.000 dong; nap day mat khoang 60-90 giay.
 --
 -- Thu tu row_number theo tao_luc tang dan: hoi thoai moi luon roi vao
 -- lat cuoi, cac lat truoc gan nhu khong doi.
 
-create or replace view gop_khach_chi_tiet as
-select h.page_id,
-       h.ma_hoi_thoai,
-       h.page_ten,
-       case when h.page_ten ilike '%implant%' or h.page_ten ilike '%dental%'
-            then 'Dental' else 'Beauty' end as mang,
-       h.tao_luc,
-       h.cap_nhat_luc,
-       coalesce(h.du_lieu ->> 'type', 'khong ro') as loai,
-       (h.du_lieu ->> 'has_phone') = 'true' as co_sdt,
-       h.du_lieu ->> 'ad_id' as ad_id,
-       h.du_lieu ->> 'customer_id' as ma_khach,
-       (h.du_lieu ->> 'message_count')::int as so_tin_nhan,
-       h.tag_hien_tai
-from hoi_thoai h;
+drop view if exists gop_kc_ds cascade;
+drop view if exists gop_khach_chi_tiet cascade;
 
-create or replace view gop_kc_ds as
+create view gop_khach_chi_tiet as
+with t as (
+  select page_id, hoi_thoai,
+         min(gan_luc) filter (where hanh_dong = 'add')                           as tag_dau,
+         max(gan_luc)                                                            as tag_cuoi,
+         min(gan_luc) filter (where hanh_dong = 'add' and tag = 'CHẤT LƯỢNG')    as cl,
+         min(gan_luc) filter (where hanh_dong = 'add' and tag = 'BOOKING')       as bk,
+         min(gan_luc) filter (where hanh_dong = 'add' and tag = 'KO QUAN TÂM')   as kqt,
+         count(*)                                                                as so_lan
+  from lich_su_tag
+  group by 1, 2
+)
+select h.page_id,
+       h.id as ma_hoi_thoai,
+       h.page_ten,
+       case when h.page_ten ~* 'dental|implant|crown|wisdom|rang'
+            then 'Dental' else 'Beauty' end as mang,
+       to_char(h.tao_luc      at time zone 'Asia/Ho_Chi_Minh', 'YYYY-MM-DD HH24:MI') as tao_luc,
+       to_char(h.cap_nhat_luc at time zone 'Asia/Ho_Chi_Minh', 'YYYY-MM-DD HH24:MI') as cap_nhat_luc,
+       coalesce(h.du_lieu ->> 'type', 'khong ro')     as loai,
+       (h.du_lieu ->> 'has_phone') = 'true'           as co_sdt,
+       h.du_lieu ->> 'ad_id_cuoi'                     as ad_id,
+       h.du_lieu ->> 'customer_id'                    as ma_khach,
+       nullif(h.du_lieu ->> 'message_count', '')      as so_tin_nhan,
+       (select string_agg(distinct x.value ->> 'text', ' | ')
+          from jsonb_array_elements(
+                 case when jsonb_typeof(h.du_lieu -> 'tags') = 'array'
+                      then h.du_lieu -> 'tags' else '[]'::jsonb end) x) as tag_hien_tai,
+       to_char(t.tag_dau  at time zone 'Asia/Ho_Chi_Minh', 'YYYY-MM-DD HH24:MI') as tag_dau_luc,
+       to_char(t.tag_cuoi at time zone 'Asia/Ho_Chi_Minh', 'YYYY-MM-DD HH24:MI') as tag_cuoi_luc,
+       to_char(t.cl       at time zone 'Asia/Ho_Chi_Minh', 'YYYY-MM-DD HH24:MI') as chat_luong_luc,
+       to_char(t.bk       at time zone 'Asia/Ho_Chi_Minh', 'YYYY-MM-DD HH24:MI') as booking_luc,
+       to_char(t.kqt      at time zone 'Asia/Ho_Chi_Minh', 'YYYY-MM-DD HH24:MI') as ko_quan_tam_luc,
+       coalesce(t.so_lan, 0) as so_lan_doi_tag
+from hoi_thoai h
+left join t on t.page_id = h.page_id and t.hoi_thoai = h.id;
+
+alter view gop_khach_chi_tiet set (security_invoker = off);
+grant select on gop_khach_chi_tiet to anon, authenticated, service_role;
+
+create view gop_kc_ds as
 select *, row_number() over (order by tao_luc, ma_hoi_thoai) as rn
 from gop_khach_chi_tiet;
 
--- Sinh gop_kc1 ... gop_kc10, moi lat 6.000 dong (suc chua 60.000).
--- Khi vuot 60.000 dong thi tang 10 thanh so lat lon hon va them cong
--- thuc IMPORTDATA tuong ung trong tab "SB - Khach chi tiet".
+-- Sinh gop_kc1 ... gop_kc15, moi lat 4.000 dong (suc chua 60.000).
+-- Khi vuot 54.000 dong thi tang 15 len va them cong thuc IMPORTDATA
+-- tuong ung trong tab "SB - Khach chi tiet" (o T7 co bao "SAP DAY").
 do $$
 declare i int;
         c text := 'page_id,ma_hoi_thoai,page_ten,mang,tao_luc,cap_nhat_luc,'
-                  'loai,co_sdt,ad_id,ma_khach,so_tin_nhan,tag_hien_tai';
+                  'loai,co_sdt,ad_id,ma_khach,so_tin_nhan,tag_hien_tai,'
+                  'tag_dau_luc,tag_cuoi_luc,chat_luong_luc,booking_luc,'
+                  'ko_quan_tam_luc,so_lan_doi_tag';
 begin
-  for i in 1..10 loop
+  for i in 1..15 loop
     execute format(
       'create or replace view gop_kc%s as select %s from gop_kc_ds '
-      'where rn > %s and rn <= %s', i, c, (i-1)*6000, i*6000);
+      'where rn > %s and rn <= %s', i, c, (i-1)*4000, i*4000);
     execute format('alter view gop_kc%s set (security_invoker = off)', i);
     execute format(
       'grant select on gop_kc%s to anon, authenticated, service_role', i);
   end loop;
 end $$;
+
+-- Kiem tra: cac so nay phai khop voi khoi T1:U5 trong tab Sheets.
+--   tong 37.557 | co moc tag 33.974 | CHAT LUONG 10.504 | BOOKING 1.054
