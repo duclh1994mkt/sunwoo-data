@@ -204,3 +204,26 @@ select (h.tao_luc at time zone 'Asia/Ho_Chi_Minh')::date as ngay,
        count(*) filter (where (h.du_lieu ->> 'has_phone') = 'true') as co_sdt
 from hoi_thoai h
 group by 1, 2, 3, 4;
+
+-- =====================================================================
+-- 9. QUYEN VA KIEU NGAY  (de Edge Function va Google Sheets doc duoc)
+-- =====================================================================
+-- Cot ngay tra ve dang chuoi 'YYYY-MM-DD' chu khong phai kieu date:
+-- qua CSV, kieu date bi tuan tu hoa thanh chuoi JS dai dong va Google
+-- Sheets khong hieu la ngay. Chuoi YYYY-MM-DD thi Sheets tu nhan.
+--
+-- security_invoker = off: view chay bang quyen chu so huu, nen chi can
+-- cap quyen tren view, bang tho van khoa kin.
+
+alter view gop_booking    set (security_invoker = off);
+alter view gop_khach_ngay set (security_invoker = off);
+alter view gop_rong       set (security_invoker = off);
+alter view gop_tag_ngay   set (security_invoker = off);
+alter view gop_content    set (security_invoker = off);
+alter view gop_ads        set (security_invoker = off);
+
+grant usage on schema public to anon, authenticated, service_role;
+grant select on
+  gop_rong, gop_khach_ngay, gop_booking, gop_tag_ngay,
+  gop_content, gop_ads, nhat_ky_chay, sao_luu_ngay
+to anon, authenticated, service_role;
