@@ -2,8 +2,10 @@ name: Kéo dữ liệu Sunwoo
 
 on:
   schedule:
-    # Mỗi giờ, vào phút 17 (tránh phút 0 vì lúc đó GitHub đông, hay bị trễ)
-    - cron: "17 * * * *"
+    # 6 lần/ngày, cách nhau 3 tiếng: 8h 11h 14h 17h 20h 23h giờ Việt Nam.
+    # GitHub chạy theo UTC nên trừ đi 7 tiếng -> 1,4,7,10,13,16.
+    # Phút 17 chứ không phải phút 0, vì phút 0 GitHub đông, hay bị trễ.
+    - cron: "17 1,4,7,10,13,16 * * *"
   workflow_dispatch:
     inputs:
       che_do:
@@ -39,4 +41,8 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           PANCAKE_TOKENS: ${{ secrets.PANCAKE_TOKENS }}
           LAY_TU_NGAY: "2026-09-01"
+          # Cửa sổ kéo: 30 ngày gần nhất, tính cả hôm nay.
+          SO_NGAY_KEO: "30"
+          # Số page kéo cùng lúc. Hạ xuống nếu Pancake chặn tốc độ theo IP.
+          SO_LUONG: "11"
         run: python keo_pancake.py ${{ inputs.che_do || 'tang-dan' }}

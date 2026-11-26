@@ -6,18 +6,27 @@ Chạy trên GitHub Actions, không có giới hạn 6 phút như Apps Script.
 
 Hai chế độ:
   python keo_pancake.py day-du      -> kéo toàn bộ từ ngày cấu hình (chạy tay, ~1-2 tiếng)
-  python keo_pancake.py tang-dan    -> chỉ lấy phần thay đổi gần đây (chạy mỗi giờ)
+  python keo_pancake.py tang-dan    -> kéo cửa sổ N ngày gần nhất (chạy theo lịch)
+
+Các page được kéo SONG SONG, mỗi page một luồng riêng, vì phần chậm là
+chờ Pancake trả lời chứ không phải tính toán. Ghi vào Postgres thì vẫn
+lần lượt (có khoá), nên một kết nối là đủ và không sợ tranh chấp.
 
 Biến môi trường cần có (đặt trong GitHub Secrets):
   DATABASE_URL     chuỗi kết nối Postgres của Supabase
   PANCAKE_TOKENS   JSON: {"<page_id>": {"ten": "...", "token": "..."}, ...}
-  LAY_TU_NGAY      tuỳ chọn, mặc định 2026-09-01
+  LAY_TU_NGAY      tuỳ chọn, mặc định 2026-09-01 (chỉ dùng cho day-du)
+  SO_NGAY_KEO      tuỳ chọn, mặc định 30 (chỉ dùng cho tang-dan)
+  SO_LUONG         tuỳ chọn, mặc định 11 — số page kéo cùng lúc.
+                   Hạ xuống 1 nếu Pancake chặn tốc độ theo IP.
 """
 
 import json
 import os
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
 import psycopg2
@@ -288,33 +297,59 @@ def chay():
         tu_giay = int(datetime.fromisoformat(tu_ngay + "T00:00:00+07:00").timestamp())
         pham_vi = f"{tu_ngay} -> nay"
     else:
-        tu_giay = den_giay - 6 * 3600
-        pham_vi = "6 tiếng gần nhất"
+        so_ngay = int(os.environ.get("SO_NGAY_KEO", "30"))
+        tu_giay = den_giay - so_ngay * 86400
+        pham_vi = f"{so_ngay} ngày gần nhất"
 
     ma_nhat_ky = mo_nhat_ky(ket_noi, che_do, pham_vi)
     tong = tong_moi = tong_sua = 0
     loi = []
 
-    for page_id, cau_hinh in cac_page.items():
+    khoa_ghi = threading.Lock()
+    bat_dau_keo = time.time()
+
+    def lam_mot_page(page_id, cau_hinh):
+        """Kéo một page (song song) rồi ghi vào kho (lần lượt, có khoá)."""
         ten = cau_hinh.get("ten") or page_id
         print(f"[{ten}] bắt đầu", flush=True)
-        try:
-            danh_sach = lay_mot_page(
-                page_id,
-                cau_hinh["token"],
-                tu_giay,
-                den_giay,
-                ghi_tien_do=lambda n: print(f"  [{ten}] {n} hội thoại", flush=True),
-            )
+        danh_sach = lay_mot_page(
+            page_id,
+            cau_hinh["token"],
+            tu_giay,
+            den_giay,
+            ghi_tien_do=lambda n: print(f"  [{ten}] {n} hội thoại", flush=True),
+        )
+        with khoa_ghi:
             moi, sua = ghi_hoi_thoai(ket_noi, page_id, ten, danh_sach)
-            tong += len(danh_sach)
-            tong_moi += moi
-            tong_sua += sua
-            print(f"[{ten}] xong: {len(danh_sach)} hội thoại, {moi} mới", flush=True)
-        except Exception as e:
-            thong_bao = f"{ten}: {e}"
-            loi.append(thong_bao)
-            print("LỖI " + thong_bao, flush=True)
+        giay = round(time.time() - bat_dau_keo)
+        print(
+            f"[{ten}] xong sau {giay}s: {len(danh_sach)} hội thoại, {moi} mới",
+            flush=True,
+        )
+        return len(danh_sach), moi, sua
+
+    so_luong = max(1, min(len(cac_page), int(os.environ.get("SO_LUONG", "11"))))
+    print(f"Kéo {len(cac_page)} page, {so_luong} page cùng lúc.\n", flush=True)
+
+    with ThreadPoolExecutor(max_workers=so_luong) as bo_chay:
+        dang_chay = {
+            bo_chay.submit(lam_mot_page, page_id, cau_hinh): cau_hinh.get("ten")
+            or page_id
+            for page_id, cau_hinh in cac_page.items()
+        }
+        for xong in as_completed(dang_chay):
+            ten = dang_chay[xong]
+            try:
+                so_dong, moi, sua = xong.result()
+                tong += so_dong
+                tong_moi += moi
+                tong_sua += sua
+            except Exception as e:
+                thong_bao = f"{ten}: {e}"
+                loi.append(thong_bao)
+                print("LỖI " + thong_bao, flush=True)
+
+    print(f"\nKéo xong toàn bộ sau {round(time.time() - bat_dau_keo)} giây.", flush=True)
 
     chup_sao_luu(ket_noi)
     dong_nhat_ky(
