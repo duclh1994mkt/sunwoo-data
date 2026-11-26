@@ -227,3 +227,56 @@ grant select on
   gop_rong, gop_khach_ngay, gop_booking, gop_tag_ngay,
   gop_content, gop_ads, nhat_ky_chay, sao_luu_ngay
 to anon, authenticated, service_role;
+
+-- =====================================================================
+-- 10. KHACH CHI TIET + 10 LAT 6.000 DONG  (cho Google Sheets)
+-- =====================================================================
+-- Google chan IMPORTDATA khi mot lan tai qua lon: 37.557 dong x 12 cot
+-- bi tu choi ("Tai nguyen tai cac noi dung url da vuot qua kich thuoc
+-- toi da"). Nguong thuc te do duoc: ~12.000 dong x 8 cot chay duoc,
+-- 22.097 dong x 12 cot thi khong. Nen cat thanh lat 6.000 dong.
+--
+-- Trong Sheets, lat k nam o dong 2 + (k-1)*6000, nen cac lat noi lien
+-- nhau thanh mot bang lien tuc, khong co dong tieu de chen giua
+-- (Edge Function nhan &tieu_de=0 thi bo dong tieu de).
+--
+-- Thu tu row_number theo tao_luc tang dan: hoi thoai moi luon roi vao
+-- lat cuoi, cac lat truoc gan nhu khong doi.
+
+create or replace view gop_khach_chi_tiet as
+select h.page_id,
+       h.ma_hoi_thoai,
+       h.page_ten,
+       case when h.page_ten ilike '%implant%' or h.page_ten ilike '%dental%'
+            then 'Dental' else 'Beauty' end as mang,
+       h.tao_luc,
+       h.cap_nhat_luc,
+       coalesce(h.du_lieu ->> 'type', 'khong ro') as loai,
+       (h.du_lieu ->> 'has_phone') = 'true' as co_sdt,
+       h.du_lieu ->> 'ad_id' as ad_id,
+       h.du_lieu ->> 'customer_id' as ma_khach,
+       (h.du_lieu ->> 'message_count')::int as so_tin_nhan,
+       h.tag_hien_tai
+from hoi_thoai h;
+
+create or replace view gop_kc_ds as
+select *, row_number() over (order by tao_luc, ma_hoi_thoai) as rn
+from gop_khach_chi_tiet;
+
+-- Sinh gop_kc1 ... gop_kc10, moi lat 6.000 dong (suc chua 60.000).
+-- Khi vuot 60.000 dong thi tang 10 thanh so lat lon hon va them cong
+-- thuc IMPORTDATA tuong ung trong tab "SB - Khach chi tiet".
+do $$
+declare i int;
+        c text := 'page_id,ma_hoi_thoai,page_ten,mang,tao_luc,cap_nhat_luc,'
+                  'loai,co_sdt,ad_id,ma_khach,so_tin_nhan,tag_hien_tai';
+begin
+  for i in 1..10 loop
+    execute format(
+      'create or replace view gop_kc%s as select %s from gop_kc_ds '
+      'where rn > %s and rn <= %s', i, c, (i-1)*6000, i*6000);
+    execute format('alter view gop_kc%s set (security_invoker = off)', i);
+    execute format(
+      'grant select on gop_kc%s to anon, authenticated, service_role', i);
+  end loop;
+end $$;

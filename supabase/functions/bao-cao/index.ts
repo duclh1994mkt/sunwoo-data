@@ -11,19 +11,16 @@
 
 import postgres from 'npm:postgres@3.4.4';
 
-const CHO_PHEP = [
-  'gop_rong', 'gop_khach_ngay', 'gop_booking',
-  'gop_tag_ngay', 'gop_content', 'gop_ads', 'nhat_ky_chay', 'sao_luu_ngay',
-];
+const HOP_LE = /^(gop_[a-z0-9_]+|nhat_ky_chay|sao_luu_ngay)$/;
 
-function sangCsv(hang: Record<string, unknown>[]): string {
+function sangCsv(hang: Record<string, unknown>[], coTieuDe = true): string {
   if (!hang.length) return '';
   const cot = Object.keys(hang[0]);
   const o = (v: unknown) => {
     const s = v === null || v === undefined ? '' : String(v);
     return /[",\n]/.test(s) ? '"' + s.replaceAll('"', '""') + '"' : s;
   };
-  const dong = [cot.join(',')];
+  const dong = coTieuDe ? [cot.join(',')] : [];
   for (const h of hang) dong.push(cot.map((c) => o(h[c])).join(','));
   return dong.join('\n');
 }
@@ -42,9 +39,10 @@ Deno.serve(async (req) => {
     return new Response(ten, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
   }
 
-  if (!CHO_PHEP.includes(bang)) {
+  if (!HOP_LE.test(bang)) {
     return new Response('Bang khong hop le: ' + bang, { status: 400 });
   }
+  const coTieuDe = url.searchParams.get('tieu_de') !== '0';
 
   const chuoiNoi = Deno.env.get('SUPABASE_DB_URL');
   if (!chuoiNoi) return new Response('Thieu SUPABASE_DB_URL', { status: 500 });
@@ -52,7 +50,7 @@ Deno.serve(async (req) => {
   const sql = postgres(chuoiNoi, { prepare: false, max: 1 });
   try {
     const hang = await sql.unsafe('select * from ' + bang + ' limit 50000');
-    return new Response(sangCsv(hang as unknown as Record<string, unknown>[]), {
+    return new Response(sangCsv(hang as unknown as Record<string, unknown>[], coTieuDe), {
       headers: {
         'Content-Type': 'text/csv; charset=utf-8',
         'Cache-Control': 'no-store',
