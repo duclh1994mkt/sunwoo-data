@@ -229,20 +229,33 @@ grant select on
 to anon, authenticated, service_role;
 
 -- =====================================================================
--- 10. KHACH CHI TIET (co moc gio tag) + 15 LAT 4.000 DONG cho Sheets
+-- 10. KHACH CHI TIET (13 cot) + 8 LAT 8.000 DONG cho Google Sheets
 -- =====================================================================
--- Google chan IMPORTDATA khi mot lan tai qua lon: 37.557 dong x 12 cot
--- bi tu choi ("Tai nguyen tai cac noi dung url da vuot qua kich thuoc
--- toi da"). Nguong do duoc: ~12.000 dong x 8 cot va 7.608 dong x 12 cot
--- chay duoc; 22.097 dong x 12 cot thi khong. Nen cat thanh lat nho.
+-- Google chan IMPORTDATA khi mot lan tai qua lon, nen phai cat lat.
+-- Do thuc te tren chinh bo du lieu nay:
+--     15 lat x 4.000 dong x 18 cot  ->  60-90 giay
+--     10 lat x 6.000 dong x 12 cot  ->  ~30 giay
+--      8 lat x 8.000 dong x 13 cot  ->  ~15 giay
+-- Thoi gian phu thuoc SO LAN GOI chu khong phai so byte: moi lat la mot
+-- lan goi Edge Function + mo ket noi Postgres rieng. Nen de lat TO nhat
+-- ma Google con chiu, dung chia nho.
 --
--- Trong tab "SB - Khach chi tiet", lat k nam o dong 2 + (k-1)*4000, nen
--- cac lat noi lien nhau thanh mot bang lien tuc khong co dong tieu de
--- chen giua (Edge Function nhan &tieu_de=0 thi bo dong tieu de).
--- 15 lat x 4.000 = suc chua 60.000 dong; nap day mat khoang 60-90 giay.
+-- Trong tab "SB - Khach chi tiet", lat k nam o dong 2 + (k-1)*8000, cac
+-- lat noi lien nhau thanh mot bang lien tuc (Edge Function nhan
+-- &tieu_de=0 thi bo dong tieu de). Suc chua 64.000 dong.
 --
--- Thu tu row_number theo tao_luc tang dan: hoi thoai moi luon roi vao
--- lat cuoi, cac lat truoc gan nhu khong doi.
+-- Da BO so voi ban truoc: co_sdt, so_tin_nhan, tag_dau_luc, tag_cuoi_luc,
+-- ko_quan_tam_luc, so_lan_doi_tag. Them: ten_khach.
+--   - co_sdt bo vi vo nghia: chi 16 / 37.659 hoi thoai co so dien thoai
+--     (ca co dinh has_phone lan mang recent_phone_numbers deu chi 16).
+--     Pancake gan nhu khong bat duoc SDT tren cac page nay.
+--   - so_tin_nhan bo vi message_count la tong CA HAI CHIEU; Pancake khong
+--     tra ve truong nao dem rieng tin cua khach. Muon tach phai goi API
+--     lay tung tin nhan cua tung hoi thoai (~28 tieng cho toan bo).
+--
+-- Luu y: view gop_khach_chi_tiet van giu cot sdt (lay tu
+-- recent_phone_numbers) phong khi Pancake bat duoc nhieu hon ve sau;
+-- chi cac lat gop_kc* la khong xuat cot do ra Sheets.
 
 drop view if exists gop_kc_ds cascade;
 drop view if exists gop_khach_chi_tiet cascade;
@@ -250,12 +263,8 @@ drop view if exists gop_khach_chi_tiet cascade;
 create view gop_khach_chi_tiet as
 with t as (
   select page_id, hoi_thoai,
-         min(gan_luc) filter (where hanh_dong = 'add')                           as tag_dau,
-         max(gan_luc)                                                            as tag_cuoi,
-         min(gan_luc) filter (where hanh_dong = 'add' and tag = 'CHẤT LƯỢNG')    as cl,
-         min(gan_luc) filter (where hanh_dong = 'add' and tag = 'BOOKING')       as bk,
-         min(gan_luc) filter (where hanh_dong = 'add' and tag = 'KO QUAN TÂM')   as kqt,
-         count(*)                                                                as so_lan
+         min(gan_luc) filter (where hanh_dong = 'add' and tag = 'CHẤT LƯỢNG') as cl,
+         min(gan_luc) filter (where hanh_dong = 'add' and tag = 'BOOKING') as bk
   from lich_su_tag
   group by 1, 2
 )
@@ -266,21 +275,20 @@ select h.page_id,
             then 'Dental' else 'Beauty' end as mang,
        to_char(h.tao_luc      at time zone 'Asia/Ho_Chi_Minh', 'YYYY-MM-DD HH24:MI') as tao_luc,
        to_char(h.cap_nhat_luc at time zone 'Asia/Ho_Chi_Minh', 'YYYY-MM-DD HH24:MI') as cap_nhat_luc,
-       coalesce(h.du_lieu ->> 'type', 'khong ro')     as loai,
-       (h.du_lieu ->> 'has_phone') = 'true'           as co_sdt,
-       h.du_lieu ->> 'ad_id_cuoi'                     as ad_id,
-       h.du_lieu ->> 'customer_id'                    as ma_khach,
-       nullif(h.du_lieu ->> 'message_count', '')      as so_tin_nhan,
+       coalesce(h.du_lieu ->> 'type', 'khong ro') as loai,
+       h.du_lieu ->> 'ad_id_cuoi'   as ad_id,
+       h.du_lieu ->> 'customer_id'  as ma_khach,
+       h.du_lieu -> 'from' ->> 'name' as ten_khach,
+       (select string_agg(distinct p.value ->> 'phone_number', ' | ')
+          from jsonb_array_elements(
+                 case when jsonb_typeof(h.du_lieu -> 'recent_phone_numbers') = 'array'
+                      then h.du_lieu -> 'recent_phone_numbers' else '[]'::jsonb end) p) as sdt,
        (select string_agg(distinct x.value ->> 'text', ' | ')
           from jsonb_array_elements(
                  case when jsonb_typeof(h.du_lieu -> 'tags') = 'array'
                       then h.du_lieu -> 'tags' else '[]'::jsonb end) x) as tag_hien_tai,
-       to_char(t.tag_dau  at time zone 'Asia/Ho_Chi_Minh', 'YYYY-MM-DD HH24:MI') as tag_dau_luc,
-       to_char(t.tag_cuoi at time zone 'Asia/Ho_Chi_Minh', 'YYYY-MM-DD HH24:MI') as tag_cuoi_luc,
-       to_char(t.cl       at time zone 'Asia/Ho_Chi_Minh', 'YYYY-MM-DD HH24:MI') as chat_luong_luc,
-       to_char(t.bk       at time zone 'Asia/Ho_Chi_Minh', 'YYYY-MM-DD HH24:MI') as booking_luc,
-       to_char(t.kqt      at time zone 'Asia/Ho_Chi_Minh', 'YYYY-MM-DD HH24:MI') as ko_quan_tam_luc,
-       coalesce(t.so_lan, 0) as so_lan_doi_tag
+       to_char(t.cl at time zone 'Asia/Ho_Chi_Minh', 'YYYY-MM-DD HH24:MI') as chat_luong_luc,
+       to_char(t.bk at time zone 'Asia/Ho_Chi_Minh', 'YYYY-MM-DD HH24:MI') as booking_luc
 from hoi_thoai h
 left join t on t.page_id = h.page_id and t.hoi_thoai = h.id;
 
@@ -291,25 +299,24 @@ create view gop_kc_ds as
 select *, row_number() over (order by tao_luc, ma_hoi_thoai) as rn
 from gop_khach_chi_tiet;
 
--- Sinh gop_kc1 ... gop_kc15, moi lat 4.000 dong (suc chua 60.000).
--- Khi vuot 54.000 dong thi tang 15 len va them cong thuc IMPORTDATA
--- tuong ung trong tab "SB - Khach chi tiet" (o T7 co bao "SAP DAY").
+-- Sinh gop_kc1 ... gop_kc8, moi lat 8.000 dong (suc chua 64.000).
+-- Phai DROP truoc roi CREATE: "create or replace view" khong bo bot cot
+-- duoc (ERROR 42P16 cannot drop columns from view).
 do $$
 declare i int;
         c text := 'page_id,ma_hoi_thoai,page_ten,mang,tao_luc,cap_nhat_luc,'
-                  'loai,co_sdt,ad_id,ma_khach,so_tin_nhan,tag_hien_tai,'
-                  'tag_dau_luc,tag_cuoi_luc,chat_luong_luc,booking_luc,'
-                  'ko_quan_tam_luc,so_lan_doi_tag';
+                  'loai,ad_id,ma_khach,ten_khach,tag_hien_tai,'
+                  'chat_luong_luc,booking_luc';
 begin
   for i in 1..15 loop
+    execute format('drop view if exists gop_kc%s', i);
+  end loop;
+  for i in 1..8 loop
     execute format(
-      'create or replace view gop_kc%s as select %s from gop_kc_ds '
-      'where rn > %s and rn <= %s', i, c, (i-1)*4000, i*4000);
+      'create view gop_kc%s as select %s from gop_kc_ds '
+      'where rn > %s and rn <= %s', i, c, (i-1)*8000, i*8000);
     execute format('alter view gop_kc%s set (security_invoker = off)', i);
     execute format(
       'grant select on gop_kc%s to anon, authenticated, service_role', i);
   end loop;
 end $$;
-
--- Kiem tra: cac so nay phai khop voi khoi T1:U5 trong tab Sheets.
---   tong 37.557 | co moc tag 33.974 | CHAT LUONG 10.504 | BOOKING 1.054
