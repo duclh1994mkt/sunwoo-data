@@ -1,11 +1,8 @@
 name: Kéo dữ liệu Sunwoo
-
 on:
   schedule:
-    # 6 lần/ngày, cách nhau 3 tiếng: 8h 11h 14h 17h 20h 23h giờ Việt Nam.
-    # GitHub chạy theo UTC nên trừ đi 7 tiếng -> 1,4,7,10,13,16.
-    # Phút 17 chứ không phải phút 0, vì phút 0 GitHub đông, hay bị trễ.
-    - cron: "17 1,4,7,10,13,16 * * *"
+    # 08:17-22:17 Asia/Bangkok; GitHub co the khoi dong tre.
+    - cron: "17 1-15 * * *"
   workflow_dispatch:
     inputs:
       che_do:
@@ -16,35 +13,29 @@ on:
         options:
           - tang-dan
           - day-du
-
 concurrency:
   group: keo-du-lieu
   cancel-in-progress: false
-
+permissions:
+  contents: read
 jobs:
   keo:
     runs-on: ubuntu-latest
-    timeout-minutes: 330
-
+    timeout-minutes: 55
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
-
       - run: pip install -r requirements.txt
-
+      - name: Kiem tra logic
+        run: python -m unittest -v test_incremental
       - name: Kéo khách từ Pancake
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           PANCAKE_TOKENS: ${{ secrets.PANCAKE_TOKENS }}
-          # Page bo sung, them sau. De trong cung khong sao.
           PANCAKE_TOKENS_THEM: ${{ secrets.PANCAKE_TOKENS_THEM }}
-          LAY_TU_NGAY: "2026-09-01"
-          # Cửa sổ kéo: 30 ngày gần nhất, tính cả hôm nay.
-          SO_NGAY_KEO: "30"
-          # Số page kéo cùng lúc. Hạ xuống nếu Pancake chặn tốc độ theo IP.
-          SO_LUONG: "11"
-        run: python keo_pancake.py ${{ inputs.che_do || 'tang-dan' }}
+          LAY_TU_NGAY: "2026-10-21"
+          SO_LUONG: "4"
+        run: python incremental.py ${{ inputs.che_do || 'tang-dan' }}
