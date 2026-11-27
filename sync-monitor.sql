@@ -24,3 +24,5 @@ select page_id,page_ten,
  to_char(cap_nhat at time zone 'Asia/Bangkok','YYYY-MM-DD HH24:MI:SS') as cap_nhat
 from public.sync_page_state order by page_ten;
 revoke all on public.gop_sync_page from anon,authenticated;
+
+create or replace view public.gop_sync_counts as select page_id,count(*) as tong_hoi_thoai,to_char(max(cap_nhat_luc) at time zone 'Asia/Bangkok','YYYY-MM-DD HH24:MI:SS') as khach_cap_nhat from public.hoi_thoai group by page_id; revoke all on public.gop_sync_counts from anon,authenticated;
