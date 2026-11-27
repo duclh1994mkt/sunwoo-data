@@ -75,6 +75,10 @@ def main():
         raise SystemExit('Che do khong hop le')
     pages = json.loads(os.environ['PANCAKE_TOKENS'])
     pages.update(json.loads(os.environ.get('PANCAKE_TOKENS_THEM') or '{}'))
+    overrides = json.loads(os.environ.get('PANCAKE_TOKENS_SUA') or '{}')
+    for page_id, replacement in overrides.items():
+        if page_id in pages and isinstance(replacement, dict) and replacement.get('token'):
+            pages[page_id] = {**pages[page_id], **replacement}
     pages = {str(k):v for k,v in pages.items() if v.get('active',True)}
     if not pages:
         raise SystemExit('Chua co page API')
