@@ -26,6 +26,7 @@ import os
 import sys
 import threading
 import time
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
@@ -37,6 +38,7 @@ VN = timezone(timedelta(hours=7))
 API = "https://pages.fm/api/public_api/v2/pages/{page_id}/conversations"
 CO_MOI_TRANG = 60
 NGHI_GIUA_TRANG = 0.15
+FIELDS = 'id,type,page_id,inserted_at,updated_at,from{id,name},customer_id,tags,tag_histories,ad_ids,ads'
 
 
 # ----------------------------------------------------------------------
@@ -55,6 +57,7 @@ def lay_mot_page(page_id, token, tu_giay, den_giay, ghi_tien_do=None):
             "since": tu_giay,
             "until": den_giay,
             "order_by": "updated_at",
+            "fields": FIELDS,
         }
         if con_tro:
             tham_so["last_conversation_id"] = con_tro
@@ -68,10 +71,17 @@ def lay_mot_page(page_id, token, tu_giay, den_giay, ghi_tien_do=None):
                 if r.status_code != 200:
                     raise RuntimeError(f"HTTP {r.status_code}")
                 du_lieu = r.json()
+                if not isinstance(du_lieu, dict) or du_lieu.get('success') is False or not isinstance(du_lieu.get('conversations'), list):
+                    message = str(du_lieu.get('message') or '') if isinstance(du_lieu, dict) else ''
+                    if any(x in message.lower() for x in ('token', 'permission', 'unauthorized')):
+                        raise PermissionError('API token/quyen khong hop le; can cap lai token cho page')
+                    raise RuntimeError('Pancake tra du lieu khong hop le; vui long thu lai')
                 break
-            except Exception as loi:
+            except PermissionError:
+                raise
+            except Exception:
                 if lan == 3:
-                    raise
+                    raise RuntimeError('Pancake khong tra loi hop le sau 4 lan thu') from None
                 time.sleep(2 * (lan + 1))
 
         # Pancake tra ve 200 kem success=false khi token het han hoac bi
@@ -94,11 +104,15 @@ def lay_mot_page(page_id, token, tu_giay, den_giay, ghi_tien_do=None):
             ghi_tien_do(len(ket_qua))
 
         moi = str(khoi[-1].get("id") or "")
-        if len(khoi) < CO_MOI_TRANG or not moi or moi == con_tro:
+        if not moi or moi == con_tro:
+            raise RuntimeError('Con tro phan trang bi lap; khong nang checkpoint')
+        if len(khoi) < CO_MOI_TRANG:
             break
         con_tro = moi
         time.sleep(NGHI_GIUA_TRANG)
 
+    else:
+        raise RuntimeError('Vuot gioi han phan trang; khong nang checkpoint')
     return list(ket_qua.values())
 
 
@@ -178,9 +192,22 @@ def ad_id_cuoi(hoi_thoai):
 # ----------------------------------------------------------------------
 # Ghi vào Supabase
 # ----------------------------------------------------------------------
+def dau_van_tag(hoi_thoai):
+    """Order-independent tags/history: chat-only changes do not rewrite old rows."""
+    return tuple(tuple(sorted(json.dumps(v, sort_keys=True, ensure_ascii=False)
+                              for v in (hoi_thoai.get(k) or [])))
+                 for k in ('tags', 'tag_histories'))
+
+
 def ghi_hoi_thoai(ket_noi, page_id, page_ten, danh_sach):
     if not danh_sach:
-        return 0, 0
+        return 0, 0, 0, 0
+
+    with ket_noi.cursor() as cur:
+        cur.execute('select id,du_lieu from hoi_thoai where page_id=%s and id=any(%s)',
+                    (page_id, [str(h['id']) for h in danh_sach]))
+        cu = dict(cur.fetchall())
+    moi = doi_tag = doi_ad = bo_qua = 0
 
     hang = []
     tag_hang = []
@@ -188,6 +215,19 @@ def ghi_hoi_thoai(ket_noi, page_id, page_ten, danh_sach):
         ma = str(hoi_thoai["id"])
         hoi_thoai = dict(hoi_thoai)
         hoi_thoai["ad_id_cuoi"] = ad_id_cuoi(hoi_thoai)
+        truoc = cu.get(ma)
+        if truoc is None:
+            moi += 1
+        else:
+            tag_doi = dau_van_tag(truoc) != dau_van_tag(hoi_thoai)
+            ad_doi = ad_id_cuoi(truoc) != hoi_thoai['ad_id_cuoi']
+            doi_tag += int(tag_doi)
+            doi_ad += int(ad_doi)
+            if not tag_doi and not ad_doi:
+                bo_qua += 1
+                continue
+            # Preserve historical fields already used by reports; new fetch omits phone/message bodies.
+            hoi_thoai = {**truoc, **hoi_thoai}
         hang.append(
             (
                 page_id,
@@ -201,10 +241,8 @@ def ghi_hoi_thoai(ket_noi, page_id, page_ten, danh_sach):
         tag_hang.extend(tach_lich_su_tag(page_id, hoi_thoai))
 
     with ket_noi.cursor() as con_tro:
-        con_tro.execute("select count(*) from hoi_thoai where page_id = %s", (page_id,))
-        truoc = con_tro.fetchone()[0]
-
-        psycopg2.extras.execute_values(
+        if hang:
+          psycopg2.extras.execute_values(
             con_tro,
             """
             insert into hoi_thoai
@@ -222,6 +260,7 @@ def ghi_hoi_thoai(ket_noi, page_id, page_ten, danh_sach):
         )
 
         if tag_hang:
+            tag_hang = list({r[:4]: r for r in tag_hang}.values())
             psycopg2.extras.execute_values(
                 con_tro,
                 """
@@ -236,12 +275,8 @@ def ghi_hoi_thoai(ket_noi, page_id, page_ten, danh_sach):
                 page_size=1000,
             )
 
-        con_tro.execute("select count(*) from hoi_thoai where page_id = %s", (page_id,))
-        sau = con_tro.fetchone()[0]
-
     ket_noi.commit()
-    moi = sau - truoc
-    return moi, len(hang) - moi
+    return moi, doi_tag, doi_ad, bo_qua
 
 
 def mo_nhat_ky(ket_noi, loai, pham_vi):
@@ -290,123 +325,9 @@ def chup_sao_luu(ket_noi):
 
 # ----------------------------------------------------------------------
 def chay():
-    che_do = sys.argv[1] if len(sys.argv) > 1 else "tang-dan"
-    if che_do not in ("day-du", "tang-dan"):
-        raise SystemExit("Chế độ phải là day-du hoặc tang-dan")
-
-    # Danh sach page goc. PANCAKE_TOKENS_THEM la phan bo sung: GitHub khong
-    # cho xem lai secret da luu, nen them page moi vao mot secret rieng de
-    # khong phai go lai toan bo token cu. Page trung id thi ban THEM thang.
-    cac_page = json.loads(os.environ["PANCAKE_TOKENS"])
-    them = (os.environ.get("PANCAKE_TOKENS_THEM") or "").strip()
-    if them:
-        bo_sung = json.loads(them)
-        cac_page.update(bo_sung)
-        print(f"Co them {len(bo_sung)} page tu PANCAKE_TOKENS_THEM.", flush=True)
-
-    ket_noi = psycopg2.connect(os.environ["DATABASE_URL"])
-
-    bay_gio = datetime.now(tz=VN)
-    den_giay = int(bay_gio.timestamp())
-
-    if che_do == "day-du":
-        tu_ngay = os.environ.get("LAY_TU_NGAY", "2026-09-01")
-        tu_giay = int(datetime.fromisoformat(tu_ngay + "T00:00:00+07:00").timestamp())
-        pham_vi = f"{tu_ngay} -> nay"
-    else:
-        so_ngay = int(os.environ.get("SO_NGAY_KEO", "30"))
-        tu_giay = den_giay - so_ngay * 86400
-        pham_vi = f"{so_ngay} ngày gần nhất"
-
-    ma_nhat_ky = mo_nhat_ky(ket_noi, che_do, pham_vi)
-    tong = tong_moi = tong_sua = 0
-    loi = []
-
-    # So hoi thoai dang co san cua tung page, de biet page nao DANG co du
-    # lieu ma lan nay lai tra ve 0 — do gan nhu chac chan la hong token,
-    # khong phai page vang khach.
-    with ket_noi.cursor() as con_tro:
-        con_tro.execute("select page_id, count(*) from hoi_thoai group by 1")
-        da_co = {str(h[0]): h[1] for h in con_tro.fetchall()}
-
-    khoa_ghi = threading.Lock()
-    bat_dau_keo = time.time()
-
-    def lam_mot_page(page_id, cau_hinh):
-        """Kéo một page (song song) rồi ghi vào kho (lần lượt, có khoá)."""
-        ten = cau_hinh.get("ten") or page_id
-        print(f"[{ten}] bắt đầu", flush=True)
-        danh_sach = lay_mot_page(
-            page_id,
-            cau_hinh["token"],
-            tu_giay,
-            den_giay,
-            ghi_tien_do=lambda n: print(f"  [{ten}] {n} hội thoại", flush=True),
-        )
-        if not danh_sach and da_co.get(str(page_id), 0) > 0:
-            raise RuntimeError(
-                f"tra ve 0 hoi thoai trong khi kho dang co "
-                f"{da_co[str(page_id)]} dong — nhieu kha nang token het han"
-            )
-        with khoa_ghi:
-            moi, sua = ghi_hoi_thoai(ket_noi, page_id, ten, danh_sach)
-        giay = round(time.time() - bat_dau_keo)
-        print(
-            f"[{ten}] xong sau {giay}s: {len(danh_sach)} hội thoại, {moi} mới",
-            flush=True,
-        )
-        return len(danh_sach), moi, sua
-
-    so_luong = max(1, min(len(cac_page), int(os.environ.get("SO_LUONG", "11"))))
-    print(f"Kéo {len(cac_page)} page, {so_luong} page cùng lúc.\n", flush=True)
-
-    with ThreadPoolExecutor(max_workers=so_luong) as bo_chay:
-        dang_chay = {
-            bo_chay.submit(lam_mot_page, page_id, cau_hinh): cau_hinh.get("ten")
-            or page_id
-            for page_id, cau_hinh in cac_page.items()
-        }
-        for xong in as_completed(dang_chay):
-            ten = dang_chay[xong]
-            try:
-                so_dong, moi, sua = xong.result()
-                tong += so_dong
-                tong_moi += moi
-                tong_sua += sua
-            except Exception as e:
-                thong_bao = f"{ten}: {e}"
-                loi.append(thong_bao)
-                print("LỖI " + thong_bao, flush=True)
-
-    print(f"\nKéo xong toàn bộ sau {round(time.time() - bat_dau_keo)} giây.", flush=True)
-
-    chup_sao_luu(ket_noi)
-    dong_nhat_ky(
-        ket_noi,
-        ma_nhat_ky,
-        tong,
-        tong_moi,
-        tong_sua,
-        "loi" if loi else "xong",
-        " | ".join(loi),
-    )
-
-    with ket_noi.cursor() as con_tro:
-        con_tro.execute("select count(*) from hoi_thoai")
-        tong_kho = con_tro.fetchone()[0]
-        con_tro.execute("select count(*) from lich_su_tag")
-        tong_tag = con_tro.fetchone()[0]
-
-    print(
-        f"\nTỔNG KẾT · lấy về {tong} hội thoại, {tong_moi} mới. "
-        f"Kho hiện có {tong_kho} hội thoại, {tong_tag} mốc gắn tag.",
-        flush=True,
-    )
-
-    ket_noi.close()
-    if loi:
-        raise SystemExit(1)
+    from incremental import main
+    main()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     chay()
