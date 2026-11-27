@@ -36,6 +36,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           PANCAKE_TOKENS: ${{ secrets.PANCAKE_TOKENS }}
           PANCAKE_TOKENS_THEM: ${{ secrets.PANCAKE_TOKENS_THEM }}
+          PANCAKE_TOKENS_SUA: ${{ secrets.PANCAKE_TOKENS_SUA }}
           LAY_TU_NGAY: "2026-10-21"
           SO_LUONG: "4"
         run: python incremental.py ${{ inputs.che_do || 'tang-dan' }}
